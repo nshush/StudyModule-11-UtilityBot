@@ -23,16 +23,19 @@ namespace UtilityBot
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            var cts = new CancellationTokenSource();
+
+            // Запускаем обработку обновлений
             _telegramClient.StartReceiving(
                 HandleUpdateAsync,
                 HandleErrorAsync,
-                new ReceiverOptions() { AllowedUpdates = { } },
-                cancellationToken: stoppingToken);
+                cancellationToken: cts.Token);
 
-            Console.WriteLine("Bot started");
+            Console.WriteLine("Bot started working...");
+            await Task.Delay(Timeout.Infinite, stoppingToken);
         }
 
-        async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
+        private async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
         {
             if (update.Type == UpdateType.Message && update.Message.Type == MessageType.Text)
             {
@@ -50,23 +53,10 @@ namespace UtilityBot
                 {
                     await _telegramClient.SendTextMessageAsync(update.Message.From.Id, "Пожалуйста, введите числа через пробел для их суммы:", cancellationToken: cancellationToken);
                 }
-                else
+                else if (!string.IsNullOrWhiteSpace(messageText))
                 {
-                    if (!string.IsNullOrWhiteSpace(messageText))
-                    {
-                        if (messageText.Contains(" "))
-                        {
-                            await SumNumbers(messageText, update.Message.From.Id, cancellationToken);
-                        }
-                        else
-                        {
-                            await CountChars(messageText, update.Message.From.Id, cancellationToken);
-                        }
-                    }
-                    else
-                    {
-                        await _telegramClient.SendTextMessageAsync(update.Message.From.Id, "Пожалуйста, введите текст для обработки.", cancellationToken: cancellationToken);
-                    }
+                    var response = await ProcessUserInput(messageText, update.Message.From.Id, cancellationToken);
+                    await _telegramClient.SendTextMessageAsync(update.Message.From.Id, response, cancellationToken: cancellationToken);
                 }
             }
         }
@@ -85,22 +75,21 @@ namespace UtilityBot
             await _telegramClient.SendTextMessageAsync(chatId, "Выберите действие:", replyMarkup: replyKeyboard, cancellationToken: cancellationToken);
         }
 
-        private async Task CountChars(string text, long chatId, CancellationToken cancellationToken)
+        private async Task<string> ProcessUserInput(string message, long chatId, CancellationToken cancellationToken)
         {
-            var charCount = text.Length;
-            await _telegramClient.SendTextMessageAsync(chatId, $"В вашем сообщении {charCount} символов.", cancellationToken: cancellationToken);
+            var numbers = message.Split(' ').Select(x => double.TryParse(x, out var num) ? num : (double?)null).ToArray();
+            if (numbers.All(x => x.HasValue))
+            {
+                var sum = numbers.Sum(x => x.Value);
+                return $"Сумма чисел: {sum}";
+            }
+            else
+            {
+                return $"В вашем сообщении {message.Length} символов.";
+            }
         }
 
-        private async Task SumNumbers(string message, long chatId, CancellationToken cancellationToken)
-        {
-            var numbers = message.Split(' ')
-                                 .Select(x => double.TryParse(x, out var num) ? num : 0)
-                                 .ToArray();
-            var sum = numbers.Sum();
-            await _telegramClient.SendTextMessageAsync(chatId, $"Сумма чисел: {sum}", cancellationToken: cancellationToken);
-        }
-
-        Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, CancellationToken cancellationToken)
+        private Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, CancellationToken cancellationToken)
         {
             var errorMessage = exception switch
             {
@@ -110,8 +99,6 @@ namespace UtilityBot
             };
 
             Console.WriteLine(errorMessage);
-            Console.WriteLine("Waiting 10 seconds before retry");
-            Thread.Sleep(10000);
             return Task.CompletedTask;
         }
     }
